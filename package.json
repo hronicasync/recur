@@ -1,0 +1,22 @@
+{
+  "name": "recur_bot",
+  "version": "1.0.0",
+  "description": "Recurring payments helper bot",
+  "main": "node.js",
+  "type": "module",
+  "scripts": {
+    "start": "node node.js",
+    "reminder:worker": "node reminderWorker.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@grammyjs/conversations": "^1.2.0",
+    "dotenv": "^17.2.2",
+    "grammy": "^1.38.2",
+    "luxon": "^3.5.0",
+    "pg": "^8.11.5",
+    "socks-proxy-agent": "^8.0.5"
+  }
+}
