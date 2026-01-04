@@ -73,7 +73,7 @@ const BOT_COMMANDS = [
   { command: 'dbstatus', description: 'проверить подключение к базе' },
 ];
 
-const proxyAgent = new SocksProxyAgent('socks5://127.0.0.1:1080');
+const proxyAgent = new SocksProxyAgent('socks5://host.docker.internal:1080');
 const bot = new Bot(token, {
   client: {
     baseFetchConfig: {
