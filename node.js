@@ -1177,28 +1177,24 @@ bot.command('list', async (ctx) => {
   if (monthly.length) {
     const monthlyLines = monthly
       .map((sub) => {
-        const name = escapeHtml(sub.name);
-        const amount = formatCurrency(sub.amount, sub.currency);
-        const dateText = escapeHtml(formatDayMonthWeekday(sub.next_due, tz));
-        return `${name} • ${amount}\n<i>след. списание ${dateText}</i>`;
+        const dateText = formatDayMonthWeekday(sub.next_due, tz);
+        return [`▫️ ${escapeHtml(sub.name)} • ${formatCurrency(sub.amount, sub.currency)}`, `🗓 след. списание ${dateText}`].join('\n');
       })
       .join('\n\n');
 
-    parts.push('<b>Ежемесячные</b>');
+    parts.push('', '<b><code>Ежемесячные</code></b>');
     parts.push(monthlyLines);
   }
 
   if (yearly.length) {
     const yearlyLines = yearly
       .map((sub) => {
-        const name = escapeHtml(sub.name);
-        const amount = formatCurrency(sub.amount, sub.currency);
-        const dateText = escapeHtml(formatDayMonthWeekday(sub.next_due, tz));
-        return `${name} • ${amount}\n<i>след. списание ${dateText}</i>`;
+        const dateText = formatDayMonthWeekday(sub.next_due, tz);
+        return [`▫️ ${escapeHtml(sub.name)} • ${formatCurrency(sub.amount, sub.currency)}`, `🗓 след. списание ${dateText}`].join('\n');
       })
       .join('\n\n');
 
-    parts.push('<b>Ежегодные</b>');
+    parts.push('', '<b><code>Ежегодные</code></b>');
     parts.push(yearlyLines);
   }
 
@@ -1206,16 +1202,17 @@ bot.command('list', async (ctx) => {
   Object.entries(monthlyTotals)
     .sort(([a], [b]) => a.localeCompare(b))
     .forEach(([currency, amount]) => {
-      totalLines.push(`Все ежемесячные в месяц: ${formatCurrency(amount, currency)}`);
+      totalLines.push(`Все ежемесячные в месяц: <code>${formatCurrency(amount, currency)}</code>`);
     });
   Object.entries(yearlyTotals)
     .sort(([a], [b]) => a.localeCompare(b))
     .forEach(([currency, amount]) => {
-      totalLines.push(`Все ежегодные в год: ${formatCurrency(amount, currency)}`);
+      totalLines.push(`Все ежегодные в год: <code>${formatCurrency(amount, currency)}</code>`);
     });
 
   if (totalLines.length) {
-    parts.push(`<b>Итого:</b>\n${totalLines.join('\n')}`);
+    parts.push('', '<b>Итого:</b>');
+    parts.push(totalLines.join('\n'));
   }
 
   const message = parts.filter(Boolean).join('\n\n');
