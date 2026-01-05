@@ -1520,7 +1520,12 @@ bot.command('upcoming', async (ctx) => {
   }, {});
 
   const sections = Object.entries(grouped)
-    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .sort(([a], [b]) => {
+      // Explicit date comparison to ensure chronological order
+      const dateA = new Date(a);
+      const dateB = new Date(b);
+      return dateA - dateB;
+    })
     .map(([date, subsForDay]) => {
       const header = `<b>${escapeHtml(formatShortDateWithWeekday(date, tz))}</b>`;
       const lines = subsForDay
