@@ -123,12 +123,35 @@ const periodKeyboard = new InlineKeyboard()
   .text('Ежемесячно', 'period:monthly')
   .text('Ежегодно', 'period:yearly');
 
+const POPULAR_EMOJIS = ['🫀', '💰', '🎵', '🎮', '📱', '☁️', '🌍', '🎾', '📺', '💳', '☎️', '✈️', '🏋️', '📚', '🎬'];
+const DEFAULT_EMOJI = '▫️';
+
+const buildEmojiKeyboard = () => {
+  const keyboard = new InlineKeyboard();
+  POPULAR_EMOJIS.forEach((emoji, index) => {
+    keyboard.text(emoji, `emoji:${emoji}`);
+    if ((index + 1) % 5 === 0) {
+      keyboard.row();
+    }
+  });
+  keyboard.row().text('Свой эмодзи', 'emoji:custom');
+  keyboard.row().text('Пропустить', 'emoji:skip');
+  return keyboard;
+};
+
 const mergeKeyboard = () => new InlineKeyboard()
   .text('Обновить существующую', 'merge:update')
   .row()
   .text('Создать отдельную', 'merge:create')
   .row()
   .text('Отмена', 'merge:cancel');
+
+const extractEmoji = (text) => {
+  if (!text) return null;
+  const emojiRegex = /(\p{Emoji_Presentation}|\p{Emoji}\uFE0F)/gu;
+  const matches = text.match(emojiRegex);
+  return matches?.[0] || null;
+};
 
 const renderSubscriptionLine = (subscription, tz) => {
   const amount = formatCurrency(subscription.amount, subscription.currency);
@@ -208,6 +231,8 @@ const buildEditFieldKeyboard = (subscriptionId) => new InlineKeyboard()
   .row()
   .text('Дата списания', `edit:field:date:${subscriptionId}`)
   .text('Периодичность', `edit:field:period:${subscriptionId}`)
+  .row()
+  .text('Эмодзи', `edit:field:emoji:${subscriptionId}`)
   .row()
   .text('Отмена', 'edit:cancel');
 
@@ -427,6 +452,29 @@ const handleEditTextInput = async (ctx, text) => {
     return true;
   }
 
+  if (state.pending === 'emoji') {
+    const extracted = extractEmoji(text);
+    if (!extracted) {
+      await ctx.reply('Не нашел эмодзи в сообщении. Попробуй еще раз.', { reply_markup: cancelInlineKeyboard });
+      return true;
+    }
+
+    let updated;
+    try {
+      updated = await updateSubscription(subscription.id, { emoji: extracted });
+    } catch (error) {
+      console.error('Failed to update emoji', { error, subscriptionId: subscription.id });
+      await ctx.reply('Не получилось обновить эмодзи. Попробуй позже.');
+      ctx.session.edit = null;
+      return true;
+    }
+
+    ctx.session.edit = { subscriptionId: subscription.id };
+    await ctx.reply(`Эмодзи успешно изменен на ${extracted}`);
+    await finishEditWithMenu(ctx, updated || { ...subscription, emoji: extracted });
+    return true;
+  }
+
   return false;
 };
 
@@ -494,6 +542,32 @@ async function addSubscriptionConversation(conversation, ctx) {
     if (!name) {
       await nameCtx.reply('Нужен текст. Попробуй снова.');
     }
+  }
+
+  await ctx.reply('Выбери эмодзи для подписки', { reply_markup: buildEmojiKeyboard() });
+  let emoji = DEFAULT_EMOJI;
+  const emojiCtx = await conversation.waitForCallbackQuery(/emoji:(.+)/);
+  const emojiChoice = emojiCtx.match[1];
+  await emojiCtx.answerCallbackQuery();
+  await emojiCtx.editMessageReplyMarkup();
+
+  if (emojiChoice === 'skip') {
+    emoji = DEFAULT_EMOJI;
+  } else if (emojiChoice === 'custom') {
+    await ctx.reply('Отправь свой эмодзи');
+    let customEmoji = null;
+    while (!customEmoji) {
+      const customEmojiCtx = await conversation.wait();
+      const extracted = extractEmoji(customEmojiCtx.message?.text);
+      if (!extracted) {
+        await customEmojiCtx.reply('Не нашел эмодзи. Попробуй еще раз.');
+      } else {
+        customEmoji = extracted;
+        emoji = customEmoji;
+      }
+    }
+  } else {
+    emoji = emojiChoice;
   }
 
   await ctx.reply('Выбери валюту', { reply_markup: currencyKeyboard });
@@ -594,6 +668,7 @@ async function addSubscriptionConversation(conversation, ctx) {
           period,
           nextDue,
           reminders: defaults,
+          emoji,
         });
       } catch (error) {
         console.error('Ошибка при создании подписки (ветка merge:create)', { error, userId: user.user_id, name, nextDue });
@@ -639,6 +714,7 @@ async function addSubscriptionConversation(conversation, ctx) {
       period,
       nextDue,
       reminders: defaults,
+      emoji,
     });
   } catch (error) {
     console.error('Ошибка при создании подписки', { error, userId: user.user_id, name, nextDue });
@@ -756,7 +832,7 @@ bot.callbackQuery(/^edit:select:(\d+)$/, async (ctx) => {
   await sendEditFieldMenu(ctx, data.subscription);
 });
 
-bot.callbackQuery(/^edit:field:(name|amount|date|period):(\d+)$/, async (ctx) => {
+bot.callbackQuery(/^edit:field:(name|amount|date|period|emoji):(\d+)$/, async (ctx) => {
   const field = ctx.match[1];
   const subscriptionId = Number.parseInt(ctx.match[2], 10);
   await ctx.answerCallbackQuery();
@@ -767,6 +843,17 @@ bot.callbackQuery(/^edit:field:(name|amount|date|period):(\d+)$/, async (ctx) =>
 
   const { subscription, user } = data;
   const tz = user?.tz || DEFAULT_TZ;
+
+  if (field === 'emoji') {
+    ctx.session.edit = { subscriptionId, pending: 'emoji' };
+    const currentEmoji = subscription.emoji || DEFAULT_EMOJI;
+    const emojiKeyboard = buildEmojiKeyboard();
+    emojiKeyboard.row().text('Установить дефолтный ▫️', 'edit:emoji:default');
+    await ctx.reply(`Выбери новый эмодзи (текущий: ${currentEmoji})`, {
+      reply_markup: emojiKeyboard,
+    });
+    return;
+  }
 
   if (field === 'name') {
     ctx.session.edit = { subscriptionId, pending: 'name' };
@@ -844,6 +931,78 @@ bot.callbackQuery(/^edit:period:set:(monthly|yearly):(\d+)$/, async (ctx) => {
   const friendly = target === 'monthly' ? 'ежемесячную' : 'ежегодную';
   await ctx.reply(`Периодичность успешно изменена на ${friendly}`);
   await sendEditFieldMenu(ctx, updated || { ...subscription, period: target });
+});
+
+bot.callbackQuery(/^emoji:(.+)$/, async (ctx) => {
+  const emojiChoice = ctx.match[1];
+  await ctx.answerCallbackQuery();
+
+  const state = ctx.session?.edit;
+  if (!state?.pending || state.pending !== 'emoji') {
+    return;
+  }
+
+  if (emojiChoice === 'skip') {
+    await ctx.reply('Выбор эмодзи пропущен');
+    ctx.session.edit = null;
+    return;
+  }
+
+  if (emojiChoice === 'custom') {
+    await ctx.reply('Отправь свой эмодзи в сообщении', {
+      reply_markup: cancelInlineKeyboard,
+    });
+    return;
+  }
+
+  const data = await loadSubscriptionForEdit(ctx, state.subscriptionId);
+  if (!data) {
+    return;
+  }
+
+  const { subscription } = data;
+  let updated;
+  try {
+    updated = await updateSubscription(subscription.id, { emoji: emojiChoice });
+  } catch (error) {
+    console.error('Failed to update emoji', { error, subscriptionId: subscription.id });
+    await ctx.reply('Не получилось обновить эмодзи. Попробуй позже.');
+    ctx.session.edit = null;
+    return;
+  }
+
+  ctx.session.edit = { subscriptionId: subscription.id };
+  await ctx.reply(`Эмодзи успешно изменен на ${emojiChoice}`);
+  await sendEditFieldMenu(ctx, updated || { ...subscription, emoji: emojiChoice });
+});
+
+bot.callbackQuery('edit:emoji:default', async (ctx) => {
+  await ctx.answerCallbackQuery();
+
+  const state = ctx.session?.edit;
+  if (!state?.pending || state.pending !== 'emoji') {
+    return;
+  }
+
+  const data = await loadSubscriptionForEdit(ctx, state.subscriptionId);
+  if (!data) {
+    return;
+  }
+
+  const { subscription } = data;
+  let updated;
+  try {
+    updated = await updateSubscription(subscription.id, { emoji: DEFAULT_EMOJI });
+  } catch (error) {
+    console.error('Failed to update emoji to default', { error, subscriptionId: subscription.id });
+    await ctx.reply('Не получилось установить дефолтный эмодзи. Попробуй позже.');
+    ctx.session.edit = null;
+    return;
+  }
+
+  ctx.session.edit = { subscriptionId: subscription.id };
+  await ctx.reply(`Эмодзи успешно установлен на дефолтный ${DEFAULT_EMOJI}`);
+  await sendEditFieldMenu(ctx, updated || { ...subscription, emoji: DEFAULT_EMOJI });
 });
 
 bot.callbackQuery('edit:cancel', async (ctx) => {
@@ -1178,7 +1337,8 @@ bot.command('list', async (ctx) => {
     const monthlyLines = monthly
       .map((sub) => {
         const dateText = formatDayMonthWeekday(sub.next_due, tz);
-        return [`▫️ ${escapeHtml(sub.name)} • ${formatCurrency(sub.amount, sub.currency)}`, `🗓 след. списание ${dateText}`].join('\n');
+        const emoji = sub.emoji || DEFAULT_EMOJI;
+        return [`${emoji} ${escapeHtml(sub.name)} • ${formatCurrency(sub.amount, sub.currency)}`, `🗓 след. списание ${dateText}`].join('\n');
       })
       .join('\n\n');
 
@@ -1190,7 +1350,8 @@ bot.command('list', async (ctx) => {
     const yearlyLines = yearly
       .map((sub) => {
         const dateText = formatDayMonthWeekday(sub.next_due, tz);
-        return [`▫️ ${escapeHtml(sub.name)} • ${formatCurrency(sub.amount, sub.currency)}`, `🗓 след. списание ${dateText}`].join('\n');
+        const emoji = sub.emoji || DEFAULT_EMOJI;
+        return [`${emoji} ${escapeHtml(sub.name)} • ${formatCurrency(sub.amount, sub.currency)}`, `🗓 след. списание ${dateText}`].join('\n');
       })
       .join('\n\n');
 
@@ -1275,13 +1436,15 @@ bot.command('month', async (ctx) => {
     .sort((a, b) => (a.next_due < b.next_due ? -1 : a.next_due > b.next_due ? 1 : a.name.localeCompare(b.name)))
     .map((sub) => {
       const dateText = formatDayMonthWeekday(sub.next_due, tz);
-      return [`▫️ ${escapeHtml(sub.name)} • ${formatCurrency(sub.amount, sub.currency)}`, `🗓 ${dateText}`].join('\n');
+      const emoji = sub.emoji || DEFAULT_EMOJI;
+      return [`${emoji} ${escapeHtml(sub.name)} • ${formatCurrency(sub.amount, sub.currency)}`, `🗓 ${dateText}`].join('\n');
     });
 
   const paidLines = paidEvents
     .map((event) => {
       const dateText = formatDayMonthWeekday(event.event_date, tz);
-      return [`✅ ${escapeHtml(event.name)} • ${formatCurrency(event.amount, event.currency)}`, `🗓 оплачен ${dateText}`].join('\n');
+      const emoji = event.emoji || DEFAULT_EMOJI;
+      return [`${emoji} ${escapeHtml(event.name)} • ${formatCurrency(event.amount, event.currency)}`, `🗓 оплачен ${dateText}`].join('\n');
     });
 
   const unpaidTotals = unpaid.reduce((acc, sub) => {
@@ -1361,7 +1524,10 @@ bot.command('upcoming', async (ctx) => {
     .map(([date, subsForDay]) => {
       const header = `<b>${escapeHtml(formatShortDateWithWeekday(date, tz))}</b>`;
       const lines = subsForDay
-        .map((sub) => `${escapeHtml(sub.name)} — ${formatCurrency(sub.amount, sub.currency)}`)
+        .map((sub) => {
+          const emoji = sub.emoji || DEFAULT_EMOJI;
+          return `${emoji} ${escapeHtml(sub.name)} — ${formatCurrency(sub.amount, sub.currency)}`;
+        })
         .join('\n');
       return `${header}\n${lines}`;
     });

@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   period VARCHAR(20) NOT NULL CHECK (period IN ('monthly', 'yearly')),
   next_due DATE NOT NULL,
   reminders JSONB DEFAULT '["T-3", "T-1", "T0"]'::jsonb,
+  emoji VARCHAR(10) DEFAULT '▫️',
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
