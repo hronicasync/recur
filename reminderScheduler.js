@@ -19,8 +19,24 @@ const SNOOZE_DAYS = [1, 2, 3, 7];
 const buildKey = (...parts) => parts.join('|');
 
 const parseReminderOffsets = (reminders) => {
-  if (!Array.isArray(reminders)) return [];
-  return reminders
+  let reminderArray;
+
+  if (Array.isArray(reminders)) {
+    reminderArray = reminders;
+  } else if (typeof reminders === 'string') {
+    try {
+      reminderArray = JSON.parse(reminders);
+    } catch (err) {
+      console.warn('⚠️ Failed to parse reminders', { reminders });
+      return [];
+    }
+  } else {
+    return [];
+  }
+
+  if (!Array.isArray(reminderArray)) return [];
+
+  return reminderArray
     .map((item) => {
       if (typeof item !== 'string') return null;
       const match = item.match(/^T-(\d+)$/);
@@ -105,13 +121,23 @@ const processUserReminders = async (bot, user, subscriptions, utcNow) => {
   const localNow = utcNow.setZone(tz);
   const dateKey = getLocalDateKey(localNow);
 
+  console.log(`👤 User ${user.user_id}: local=${localNow.toFormat('HH:mm')}, notify=${user.notify_hour}, subs=${subscriptions.length}`);
+
   // Weekly digest
-  if (localNow.weekday === 1 && localNow.hour === user.notify_hour && localNow.minute === 0) {
+  if (localNow.weekday === 1 && localNow.hour === user.notify_hour && localNow.minute >= 0 && localNow.minute < 2) {
     const key = buildKey(user.user_id, 'weekly', dateKey);
     if (await shouldSend(key)) {
-      await sendWeeklyDigest(bot, user, subscriptions, localNow).catch((err) => {
-        console.error('Failed to send weekly digest', { err, userId: user.user_id });
-      });
+      try {
+        await sendWeeklyDigest(bot, user, subscriptions, localNow);
+        console.log(`✅ Weekly digest sent: user=${user.user_id}, key=${key}`);
+      } catch (err) {
+        console.error(`❌ Failed to send weekly digest`, {
+          err: err.message,
+          userId: user.user_id,
+          key,
+          stack: err.stack
+        });
+      }
     }
   }
 
@@ -120,38 +146,67 @@ const processUserReminders = async (bot, user, subscriptions, utcNow) => {
     if (!due.isValid) continue;
 
     const diffDays = Math.floor(due.startOf('day').diff(localNow.startOf('day'), 'days').days);
+    console.log(`  📅 ${sub.name}: due=${sub.next_due}, diff=${diffDays}d`);
 
     const reminderOffsets = parseReminderOffsets(sub.reminders);
-    const shouldSendPreNow = localNow.hour === user.notify_hour && localNow.minute === 0;
+    const shouldSendPreNow = localNow.hour === user.notify_hour && localNow.minute >= 0 && localNow.minute < 2;
     for (const offset of reminderOffsets) {
       if (offset <= 0) continue;
       if (diffDays !== offset) continue;
       if (!shouldSendPreNow) continue;
       const key = buildKey(user.user_id, sub.id, `pre-${offset}`, dateKey);
       if (await shouldSend(key)) {
-        sendPreReminder(bot, user, sub, offset).catch((err) => {
-          console.error('Failed to send pre-reminder', err);
-        });
+        try {
+          await sendPreReminder(bot, user, sub, offset);
+          console.log(`✅ Pre-reminder sent: user=${user.user_id}, sub=${sub.id}, offset=T-${offset}, key=${key}`);
+        } catch (err) {
+          console.error(`❌ Failed to send pre-reminder`, {
+            err: err.message,
+            userId: user.user_id,
+            subId: sub.id,
+            offset,
+            key,
+            stack: err.stack
+          });
+        }
       }
     }
 
     // Morning reminder (T0)
-    if (diffDays === 0 && localNow.hour === user.notify_hour && localNow.minute === 0) {
+    if (diffDays === 0 && localNow.hour === user.notify_hour && localNow.minute >= 0 && localNow.minute < 2) {
       const key = buildKey(user.user_id, sub.id, 'morning', dateKey);
       if (await shouldSend(key)) {
-        sendMorningReminder(bot, user, sub).catch((err) => {
-          console.error('Failed to send morning reminder', err);
-        });
+        try {
+          await sendMorningReminder(bot, user, sub);
+          console.log(`✅ Morning reminder sent: user=${user.user_id}, sub=${sub.id}, key=${key}`);
+        } catch (err) {
+          console.error(`❌ Failed to send morning reminder`, {
+            err: err.message,
+            userId: user.user_id,
+            subId: sub.id,
+            key,
+            stack: err.stack
+          });
+        }
       }
     }
 
     // Evening check at 20:00 local time
-    if (diffDays === 0 && localNow.hour === EVENING_HOUR && localNow.minute === 0) {
+    if (diffDays === 0 && localNow.hour === EVENING_HOUR && localNow.minute >= 0 && localNow.minute < 2) {
       const key = buildKey(user.user_id, sub.id, 'evening', dateKey);
       if (await shouldSend(key)) {
-        sendEveningCheck(bot, user, sub).catch((err) => {
-          console.error('Failed to send evening check', err);
-        });
+        try {
+          await sendEveningCheck(bot, user, sub);
+          console.log(`✅ Evening check sent: user=${user.user_id}, sub=${sub.id}, key=${key}`);
+        } catch (err) {
+          console.error(`❌ Failed to send evening check`, {
+            err: err.message,
+            userId: user.user_id,
+            subId: sub.id,
+            key,
+            stack: err.stack
+          });
+        }
       }
     }
   }
@@ -161,9 +216,12 @@ export const startReminderScheduler = async (bot) => {
   await ensureSchema();
   const tick = async () => {
     const utcNow = DateTime.utc();
+    console.log(`🔄 Tick: ${utcNow.toISO()}`);
+
     let users;
     try {
       users = await getAllUsers();
+      console.log(`📊 Users: ${users.length}`);
     } catch (error) {
       console.error('Failed to load users for reminders', error);
       return;
