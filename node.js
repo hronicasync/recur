@@ -54,7 +54,7 @@ if (!token) {
 }
 
 const DEFAULT_TZ = process.env.DEFAULT_TZ || 'Europe/Moscow';
-const DEFAULT_NOTIFY_HOUR = Number.parseInt(process.env.DEFAULT_NOTIFY_HOUR || '16', 10);
+const DEFAULT_NOTIFY_HOUR = Number.parseInt(process.env.DEFAULT_NOTIFY_HOUR || '10', 10);
 const DEFAULT_REMINDERS = (process.env.DEFAULT_REMINDERS || 'T-3,T-1,T0')
   .split(',')
   .map((item) => item.trim())
