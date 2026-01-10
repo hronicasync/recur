@@ -29,3 +29,6 @@ build/
 
 # Docker
 logs/
+
+# Internal docs (not for git)
+CHANGELOG.md
