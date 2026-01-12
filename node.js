@@ -1445,11 +1445,12 @@ bot.command('checknotifications', async (ctx) => {
 
   let subsSection = `\n<b>📋 Активные подписки: ${subscriptions.length}</b>\n`;
 
+  const today = [];
+  const thisWeek = [];
+
   if (subscriptions.length === 0) {
     subsSection += 'У вас пока нет подписок.\n';
   } else {
-    const today = [];
-    const thisWeek = [];
 
     for (const sub of subscriptions) {
       const due = sub.next_due instanceof Date
