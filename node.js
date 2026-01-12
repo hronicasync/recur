@@ -46,6 +46,7 @@ import {
   getSchedulerStatus,
 } from './reminderScheduler.js';
 import { query } from './db.js';
+import { ensureSchema as ensureReminderLogSchema } from './lib/reminderLog.js';
 
 const token = process.env.BOT_TOKEN;
 
@@ -1731,6 +1732,9 @@ if (ENABLE_REMINDER_SCHEDULER) {
 
 const launch = async () => {
   try {
+    await ensureReminderLogSchema();
+    console.log('✅ reminder_log table ensured');
+
     const me = await bot.api.getMe();
     console.log(`Запустился как @${me.username}`);
 
