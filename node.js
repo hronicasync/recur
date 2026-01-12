@@ -1735,6 +1735,7 @@ const launch = async () => {
     console.log(`Запустился как @${me.username}`);
 
     await bot.api.setMyCommands(BOT_COMMANDS);
+    console.log('✅ Bot commands registered:', BOT_COMMANDS.map(c => c.command).join(', '));
 
     await bot.api.deleteWebhook({ drop_pending_updates: true });
     await bot.start();
