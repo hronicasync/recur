@@ -43,6 +43,7 @@ import {
   handleSnooze,
   handleCustomSnoozePrompt,
   fetchSubscriptionWithUser,
+  getSchedulerStatus,
 } from './reminderScheduler.js';
 import { query } from './db.js';
 
@@ -71,6 +72,7 @@ const BOT_COMMANDS = [
   { command: 'delete', description: 'удалить подписку' },
   { command: 'reminders', description: 'управлять напоминаниями' },
   { command: 'dbstatus', description: 'проверить подключение к базе' },
+  { command: 'checknotifications', description: 'проверить статус напоминаний' },
 ];
 
 const proxyAgent = new SocksProxyAgent('socks5://host.docker.internal:1080');
@@ -1407,6 +1409,137 @@ bot.command('dbstatus', async (ctx) => {
   }
 });
 
+bot.command('checknotifications', async (ctx) => {
+  const user = ctx.state.user;
+  const tz = user?.tz || DEFAULT_TZ;
+  const localNow = DateTime.now().setZone(tz);
+
+  // 1. Статус планировщика
+  const schedulerStatus = getSchedulerStatus();
+  const statusEmoji = schedulerStatus.isRunning ? '✅' : '❌';
+  const statusText = schedulerStatus.isRunning ? 'Запущен' : 'ОСТАНОВЛЕН';
+
+  let statusSection = `<b>📡 Статус планировщика:</b>\n${statusEmoji} ${statusText}\n`;
+  if (schedulerStatus.isRunning) {
+    const lastTick = schedulerStatus.lastTickTime
+      ? DateTime.fromISO(schedulerStatus.lastTickTime).setZone(tz).toFormat('HH:mm:ss')
+      : '—';
+    statusSection += `Последний тик: ${lastTick}\n`;
+    statusSection += `Всего тиков: ${schedulerStatus.tickCount}\n`;
+  }
+
+  // 2. Настройки пользователя
+  const reminderOffsets = parseReminderSelection(user?.default_reminders ?? DEFAULT_REMINDERS);
+  const reminderList = reminderOffsets.length > 0
+    ? reminderOffsets.map(o => `T-${o}`).join(', ')
+    : 'нет';
+
+  let settingsSection = `\n<b>⚙️ Ваши настройки:</b>\n`;
+  settingsSection += `Часовой пояс: ${tz}\n`;
+  settingsSection += `Время напоминаний: ${formatHour(user.notify_hour)}:00\n`;
+  settingsSection += `Предварительные: ${reminderList}\n`;
+
+  // 3. Подписки
+  const subscriptions = await listSubscriptionsForUser(user.user_id);
+
+  let subsSection = `\n<b>📋 Активные подписки: ${subscriptions.length}</b>\n`;
+
+  if (subscriptions.length === 0) {
+    subsSection += 'У вас пока нет подписок.\n';
+  } else {
+    const today = [];
+    const thisWeek = [];
+
+    for (const sub of subscriptions) {
+      const due = sub.next_due instanceof Date
+        ? DateTime.fromJSDate(sub.next_due, { zone: 'utc' }).setZone(tz)
+        : DateTime.fromISO(sub.next_due, { zone: 'utc' }).setZone(tz);
+
+      if (!due.isValid) continue;
+
+      const diffDays = Math.floor(due.startOf('day').diff(localNow.startOf('day'), 'days').days);
+
+      const subInfo = {
+        name: sub.name,
+        emoji: sub.emoji || DEFAULT_EMOJI,
+        amount: formatCurrency(sub.amount, sub.currency),
+        due: formatShortDateWithWeekday(sub.next_due, tz),
+        diffDays,
+      };
+
+      if (diffDays === 0) today.push(subInfo);
+      else if (diffDays > 0 && diffDays <= 6) thisWeek.push(subInfo);
+    }
+
+    if (today.length > 0) {
+      subsSection += `\n🔴 Сегодня (${today.length}):\n`;
+      today.forEach(s => {
+        subsSection += `  ${s.emoji} ${escapeHtml(s.name)} — ${s.amount}\n`;
+      });
+    }
+
+    if (thisWeek.length > 0) {
+      subsSection += `\n🟡 На неделе (${thisWeek.length}):\n`;
+      thisWeek.forEach(s => {
+        subsSection += `  ${s.emoji} ${escapeHtml(s.name)} (T-${s.diffDays}) — ${s.due}\n`;
+      });
+    }
+  }
+
+  // 4. История отправленных
+  const { rows: recentReminders } = await query(
+    `SELECT key, sent_at
+     FROM reminder_log
+     WHERE key LIKE $1
+     ORDER BY sent_at DESC
+     LIMIT 5`,
+    [`${user.user_id}|%`]
+  );
+
+  let historySection = `\n<b>📜 Последние отправленные:</b>\n`;
+  if (recentReminders.length === 0) {
+    historySection += 'Напоминания ещё не отправлялись.\n';
+  } else {
+    recentReminders.forEach(r => {
+      const parts = r.key.split('|');
+      const type = parts[2] || parts[1];
+      const dateKey = parts[parts.length - 1];
+      const sentAt = DateTime.fromJSDate(r.sent_at, { zone: 'utc' }).setZone(tz);
+      historySection += `  ${type} (${dateKey}) в ${sentAt.toFormat('HH:mm:ss')}\n`;
+    });
+  }
+
+  // 5. Симуляция
+  let simulationSection = `\n<b>🔮 Что отправится сейчас:</b>\n`;
+  simulationSection += `Сейчас: ${localNow.toFormat('HH:mm')} (${localNow.weekdayLong})\n`;
+
+  const isMonday = localNow.weekday === 1;
+  const isNotifyHour = localNow.hour === user.notify_hour && localNow.minute >= 0 && localNow.minute < 2;
+
+  if (isMonday && isNotifyHour) {
+    simulationSection += `✅ Еженедельный дайджест отправится\n`;
+  } else {
+    simulationSection += `❌ Еженедельный дайджест НЕ отправится\n`;
+    if (!isMonday) simulationSection += `  (не понедельник)\n`;
+    if (!isNotifyHour) simulationSection += `  (не ${user.notify_hour}:00-${user.notify_hour}:01)\n`;
+  }
+
+  if (today.length > 0 && isNotifyHour) {
+    simulationSection += `✅ Утренние T0 отправятся для ${today.length} подписок\n`;
+  }
+
+  const message = [
+    statusSection,
+    settingsSection,
+    subsSection,
+    historySection,
+    simulationSection,
+    `\n💡 /reminders — изменить настройки`
+  ].join('');
+
+  await ctx.reply(message, { parse_mode: 'HTML' });
+});
+
 bot.command('month', async (ctx) => {
   const user = ctx.state.user;
   const tz = user?.tz || DEFAULT_TZ;
@@ -1577,15 +1710,23 @@ bot.command('pause', async (ctx) => {
 });
 
 if (ENABLE_REMINDER_SCHEDULER) {
+  console.log('🚀 Starting reminder scheduler...');
   startReminderScheduler(bot)
-    .then((handle) => {
-      if (handle) {
-        console.log('Reminder scheduler started');
+    .then((intervalId) => {
+      if (intervalId) {
+        console.log(`✅ Reminder scheduler started successfully (interval=${intervalId})`);
+      } else {
+        console.error('⚠️ Reminder scheduler returned no interval ID');
       }
     })
-    .catch((err) => console.error('Failed to start reminder scheduler', err));
+    .catch((err) => {
+      console.error('❌ CRITICAL: Failed to start reminder scheduler');
+      console.error('Error:', err.message);
+      console.error('Stack:', err.stack);
+      // НЕ выходим из процесса - бот продолжит работать без напоминаний
+    });
 } else {
-  console.log('Reminder scheduler disabled (ENABLE_REMINDER_SCHEDULER=false).');
+  console.log('⚠️ Reminder scheduler is DISABLED (ENABLE_REMINDER_SCHEDULER=false)');
 }
 
 const launch = async () => {

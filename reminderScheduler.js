@@ -16,6 +16,17 @@ const SCHEDULER_INTERVAL_MS = 60_000;
 const EVENING_HOUR = 20;
 const SNOOZE_DAYS = [1, 2, 3, 7];
 
+let schedulerInterval = null;
+let lastTickTime = null;
+let tickCount = 0;
+
+export const getSchedulerStatus = () => ({
+  isRunning: schedulerInterval !== null,
+  intervalId: schedulerInterval,
+  lastTickTime: lastTickTime ? lastTickTime.toISO() : null,
+  tickCount,
+});
+
 const buildKey = (...parts) => parts.join('|');
 
 const parseReminderOffsets = (reminders) => {
@@ -49,10 +60,17 @@ const parseReminderOffsets = (reminders) => {
 
 const getLocalDateKey = (dt) => dt.toFormat('yyyy-LL-dd');
 
+const parseDueDate = (nextDue, tz) => {
+  if (nextDue instanceof Date) {
+    return DateTime.fromJSDate(nextDue, { zone: 'utc' }).setZone(tz);
+  }
+  return DateTime.fromISO(nextDue, { zone: 'utc' }).setZone(tz);
+};
+
 const sendWeeklyDigest = async (bot, user, subscriptions, localNow) => {
   const upcoming = subscriptions
     .filter((sub) => {
-      const due = DateTime.fromISO(sub.next_due, { zone: 'utc' }).setZone(user.tz || 'Europe/Moscow');
+      const due = parseDueDate(sub.next_due, user.tz || 'Europe/Moscow');
       const diff = Math.floor(due.startOf('day').diff(localNow.startOf('day'), 'days').days);
       return diff >= 0 && diff <= 6;
     })
@@ -142,7 +160,7 @@ const processUserReminders = async (bot, user, subscriptions, utcNow) => {
   }
 
   for (const sub of subscriptions) {
-    const due = DateTime.fromISO(sub.next_due, { zone: 'utc' }).setZone(tz);
+    const due = parseDueDate(sub.next_due, tz);
     if (!due.isValid) continue;
 
     const diffDays = Math.floor(due.startOf('day').diff(localNow.startOf('day'), 'days').days);
@@ -215,8 +233,10 @@ const processUserReminders = async (bot, user, subscriptions, utcNow) => {
 export const startReminderScheduler = async (bot) => {
   await ensureSchema();
   const tick = async () => {
+    lastTickTime = DateTime.utc();
+    tickCount++;
     const utcNow = DateTime.utc();
-    console.log(`🔄 Tick: ${utcNow.toISO()}`);
+    console.log(`🔄 Tick #${tickCount}: ${utcNow.toISO()}`);
 
     let users;
     try {
@@ -245,10 +265,17 @@ export const startReminderScheduler = async (bot) => {
   };
 
   // initial kick
-  await tick().catch((err) => console.error('Reminder tick failed', err));
-  return setInterval(() => {
-    tick().catch((err) => console.error('Reminder tick failed', err));
+  await tick().catch((err) => {
+    console.error('❌ Initial reminder tick failed', err);
+    throw err;
+  });
+
+  schedulerInterval = setInterval(() => {
+    tick().catch((err) => console.error('❌ Reminder tick failed', err));
   }, SCHEDULER_INTERVAL_MS);
+
+  console.log(`✅ Reminder scheduler started (interval=${SCHEDULER_INTERVAL_MS}ms)`);
+  return schedulerInterval;
 };
 
 export const handleMarkPaid = async (ctx, subscription) => {
